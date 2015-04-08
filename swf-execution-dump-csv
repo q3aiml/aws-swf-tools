@@ -1,0 +1,86 @@
+#!/usr/bin/env python3
+
+import json
+import sys
+import re
+import time
+import argparse
+
+import boto.swf.layer2 as swf2
+import boto.swf.layer1
+
+import swflib
+
+conn = boto.swf.layer1.Layer1()
+
+parser = argparse.ArgumentParser()
+parser.add_argument('domain_name')
+parser.add_argument('run_id', nargs='?')
+parser.add_argument('workflow_id', nargs='?')
+parser.add_argument('-v', '--verbose', action='store_true')
+parser.add_argument('--close-oldest-date', type=int, default=-3600,
+                    help="Filters executions to not include those older than the given date."
+                         "Can be relative to now by providing a negative value."
+                         "Defaults to -3600 (1 hour ago)")
+args = parser.parse_args()
+verbose = args.verbose
+
+if bool(args.run_id) ^ bool(args.workflow_id):
+    print("must specify both run_id and workflow_id", file=sys.stderr)
+    sys.exit(-1)
+
+
+def print_verbose(*args):
+    if verbose:
+        print(*args, file=sys.stderr)
+
+
+def prettyjson(jsonstr):
+    return json.dumps(json.loads(jsonstr), indent=2)
+
+
+def execution_as_tsv(workflow, domain_name, run_id, workflow_id):
+    events = swflib.get_all_events(conn, domain_name, run_id, workflow_id)
+    print_verbose()
+    print_verbose()
+    print_verbose(events)
+    print_verbose()
+    print_verbose()
+
+    sevents = swflib.summarize_events(events)
+
+    for sevent in sevents.values():
+        typetype = sevent['attributes'].get('workflowType') or sevent['attributes'].get('activityType')
+        time_schedule = sevent.get('time_schedule')
+        time_start = sevent.get('time_start')
+        time_end = sevent.get('time_end')
+        print(workflow, run_id, workflow_id, sevent.get('type'), typetype['name'], typetype['version'],
+              time_schedule, time_start, time_end,
+              time_start - time_schedule if time_schedule else None,
+              time_end - time_start if time_end else None,
+              sep='\t')
+
+
+print_verbose("using domain " + args.domain_name)
+
+print("workflow", "run id", "workflow id", "type", "name", "version", "schedule time", "start time", "end time",
+      "schedule to work duration", "work duration", sep='\t')
+
+if args.run_id and args.workflow_id:
+    execution_as_tsv("", args.domain_name, args.run_id, args.workflow_id)
+else:
+    print_verbose("finding executions")
+    domain = swf2.Domain(name=args.domain_name)
+
+    close_oldest_date = args.close_oldest_date
+    if close_oldest_date and close_oldest_date < 0:
+        close_oldest_date = time.time() + close_oldest_date
+
+    executions = domain.executions(closed=True, close_oldest_date=close_oldest_date)
+    print_verbose(executions)
+
+    for execution in executions:
+        execution_as_tsv(execution.name, args.domain_name, execution.runId, execution.workflowId)
+
+
+
